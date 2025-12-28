@@ -1,0 +1,10 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const availabilityController_1 = require("../controllers/availabilityController");
+const authMiddleware_1 = require("../middlewares/authMiddleware");
+const client_1 = require("@prisma/client");
+const router = (0, express_1.Router)();
+router.use(authMiddleware_1.protect);
+router.patch('/status', (0, authMiddleware_1.restrictTo)(client_1.Role.BARBER), availabilityController_1.updateAvailability);
+exports.default = router;
