@@ -34,6 +34,32 @@ export const calculateCurrentPosition = async (itemId: string): Promise<number> 
     return itemsAhead + 1;
 };
 
+/**
+ * Get queue preview for a shop - shows how many customers are ahead.
+ * This is READ-ONLY and privacy-friendly (no user details exposed).
+ * Used before customer joins to show "Currently X people waiting"
+ */
+export const getQueuePreview = async (shopId: string): Promise<{ customersWaiting: number }> => {
+    const queue = await prisma.queue.findUnique({
+        where: { shopId }
+    });
+
+    if (!queue) {
+        // Queue doesn't exist yet - shop might not have any customers
+        return { customersWaiting: 0 };
+    }
+
+    // Count customers currently WAITING or SERVING (not completed/cancelled)
+    const customersWaiting = await prisma.queueItem.count({
+        where: {
+            queueId: queue.id,
+            status: { in: [QueueStatus.WAITING, QueueStatus.SERVING] }
+        }
+    });
+
+    return { customersWaiting };
+};
+
 export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = false) => {
 
     const queue = await prisma.queue.findUnique({
@@ -96,7 +122,11 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
 
 
 export const joinQueue = async (shopId: string, customerId: string, serviceIds: string[]) => {
-    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+    console.log("[DEBUG SERVICE] joinQueue called:", { shopId, customerId, serviceIds });
+    
+    let newItem;
+    
+    newItem = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         // 1. Get Queue and Lock it (Prisma doesn't easily lock rows like SELECT FOR UPDATE without raw query, 
         // but we can rely on atomicity of transaction logic for consistency checks if we re-read).
         // For high concurrency, we'd use raw SQL `SELECT ... FOR UPDATE`.
@@ -170,8 +200,21 @@ export const joinQueue = async (shopId: string, customerId: string, serviceIds: 
             }
         });
 
+        console.log("[DEBUG SERVICE] Queue item created with tokenNumber:", newItem.tokenNumber);
         return newItem;
     });
+
+    // Calculate current position after transaction completes (immediate calculation)
+    const currentPosition = await calculateCurrentPosition(newItem.id);
+    
+    // Return item with currentPosition attached
+    const result = {
+        ...newItem,
+        currentPosition
+    };
+    
+    console.log("[DEBUG SERVICE] Returning joinQueue result with currentPosition:", currentPosition);
+    return result;
 };
 
 export const joinWalkIn = async (shopId: string, walkInName: string, serviceIds: string[]) => {
@@ -244,6 +287,42 @@ export const updateQueueItemStatus = async (itemId: string, status: QueueStatus,
                 }
             });
         }
+
+        return updatedItem;
+    });
+};
+
+/**
+ * Leave queue - customer cancels their queue entry
+ * Constraints:
+ * - Only the customer who created the item can leave
+ * - Only if status is WAITING (not being served or already completed)
+ * - Marks status as CANCELLED (does NOT delete)
+ */
+export const leaveQueue = async (itemId: string, customerId: string) => {
+    return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+        const item = await tx.queueItem.findUnique({
+            where: { id: itemId },
+            include: { queue: true }
+        });
+
+        if (!item) throw new AppError('Queue item not found', 404);
+
+        // Only the customer who joined can leave
+        if (item.customerId !== customerId) {
+            throw new AppError('You can only leave your own queue entry', 403);
+        }
+
+        // Can only cancel if in WAITING status
+        if (item.status !== QueueStatus.WAITING) {
+            throw new AppError('Can only leave queue while waiting. You are already being served or have completed.', 400);
+        }
+
+        // Mark as CANCELLED instead of deleting
+        const updatedItem = await tx.queueItem.update({
+            where: { id: itemId },
+            data: { status: QueueStatus.CANCELLED }
+        });
 
         return updatedItem;
     });

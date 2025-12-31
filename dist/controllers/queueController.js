@@ -36,7 +36,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getMyCustomerQueue = exports.addWalkIn = exports.toggleQueuePause = exports.updateStatus = exports.joinQueue = exports.getMyQueue = exports.getQueue = void 0;
+exports.leaveQueue = exports.getMyCustomerQueue = exports.addWalkIn = exports.toggleQueuePause = exports.updateStatus = exports.joinQueue = exports.getMyQueue = exports.getQueuePreview = exports.getQueue = void 0;
 const catchAsync_1 = require("../utils/catchAsync");
 const queueService = __importStar(require("../services/queueService"));
 const client_1 = require("@prisma/client");
@@ -49,7 +49,13 @@ exports.getQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     const queue = await queueService.getShopQueue(shopId);
     res.status(200).json({ status: 'success', data: queue });
 });
+exports.getQueuePreview = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    const { shopId } = req.params;
+    const preview = await queueService.getQueuePreview(shopId);
+    res.status(200).json({ status: 'success', data: preview });
+});
 exports.getMyQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    console.log("[DEBUG] getMyQueue called");
     if (!req.user)
         return next(new AppError_1.AppError('Unauthorized', 401));
     const barber = await prisma_1.default.barber.findUnique({
@@ -57,19 +63,38 @@ exports.getMyQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     });
     if (!barber)
         return next(new AppError_1.AppError('Barber not found', 404));
+    console.log("[DEBUG] Fetching queue for shop:", barber.shopId);
     const queue = await queueService.getShopQueue(barber.shopId, true);
+    console.log("[DEBUG] Queue fetched, items count:", queue.items?.length || 0);
     res.status(200).json({ status: 'success', data: queue });
 });
 exports.joinQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    console.log("[DEBUG] joinQueue called");
     const { shopId, serviceIds } = req.body;
+    console.log("[DEBUG] Request body:", { shopId, serviceIds });
+    // Validate required fields
+    if (!shopId || !serviceIds || !Array.isArray(serviceIds)) {
+        console.error("[ERROR] Missing required fields");
+        return next(new AppError_1.AppError('shopId and serviceIds array are required', 400));
+    }
     if (!req.user || req.user.role !== 'CUSTOMER') {
+        console.error("[ERROR] User is not a customer", req.user);
         return next(new AppError_1.AppError('Only customers can join queue', 403));
     }
     const customer = await prisma_1.default.customer.findUnique({ where: { userId: req.user.id } });
     if (!customer)
         throw new AppError_1.AppError('Customer profile not found', 404);
+    console.log("[DEBUG] Creating queue item for customer:", customer.id);
     const item = await queueService.joinQueue(shopId, customer.id, serviceIds);
-    res.status(201).json({ status: 'success', data: item });
+    console.log("[DEBUG] Queue item created:", item);
+    // Ensure tokenNumber is in response
+    res.status(201).json({
+        status: 'success',
+        data: {
+            ...item,
+            tokenNumber: item.tokenNumber
+        }
+    });
 });
 exports.updateStatus = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     const { itemId } = req.params;
@@ -167,4 +192,17 @@ exports.getMyCustomerQueue = (0, catchAsync_1.catchAsync)(async (req, res, next)
             fullQueue: fullQueue.items
         }
     });
+});
+exports.leaveQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user || req.user.role !== 'CUSTOMER') {
+        return next(new AppError_1.AppError('Only customers can leave queue', 403));
+    }
+    const { itemId } = req.params;
+    const customer = await prisma_1.default.customer.findUnique({
+        where: { userId: req.user.id }
+    });
+    if (!customer)
+        return next(new AppError_1.AppError('Customer profile not found', 404));
+    const item = await queueService.leaveQueue(itemId, customer.id);
+    res.status(200).json({ status: 'success', data: item, message: 'You have left the queue' });
 });

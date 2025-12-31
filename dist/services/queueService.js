@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateQueueItemStatus = exports.joinWalkIn = exports.joinQueue = exports.getShopQueue = exports.calculateCurrentPosition = void 0;
+exports.leaveQueue = exports.updateQueueItemStatus = exports.joinWalkIn = exports.joinQueue = exports.getShopQueue = exports.getQueuePreview = exports.calculateCurrentPosition = void 0;
 const prisma_1 = __importDefault(require("../utils/prisma"));
 const AppError_1 = require("../utils/AppError");
 const client_1 = require("@prisma/client");
@@ -36,6 +36,29 @@ const calculateCurrentPosition = async (itemId) => {
     return itemsAhead + 1;
 };
 exports.calculateCurrentPosition = calculateCurrentPosition;
+/**
+ * Get queue preview for a shop - shows how many customers are ahead.
+ * This is READ-ONLY and privacy-friendly (no user details exposed).
+ * Used before customer joins to show "Currently X people waiting"
+ */
+const getQueuePreview = async (shopId) => {
+    const queue = await prisma_1.default.queue.findUnique({
+        where: { shopId }
+    });
+    if (!queue) {
+        // Queue doesn't exist yet - shop might not have any customers
+        return { customersWaiting: 0 };
+    }
+    // Count customers currently WAITING or SERVING (not completed/cancelled)
+    const customersWaiting = await prisma_1.default.queueItem.count({
+        where: {
+            queueId: queue.id,
+            status: { in: [client_1.QueueStatus.WAITING, client_1.QueueStatus.SERVING] }
+        }
+    });
+    return { customersWaiting };
+};
+exports.getQueuePreview = getQueuePreview;
 const getShopQueue = async (shopId, skipStatusCheck = false) => {
     const queue = await prisma_1.default.queue.findUnique({
         where: { shopId },
@@ -88,7 +111,9 @@ const getShopQueue = async (shopId, skipStatusCheck = false) => {
 };
 exports.getShopQueue = getShopQueue;
 const joinQueue = async (shopId, customerId, serviceIds) => {
-    return await prisma_1.default.$transaction(async (tx) => {
+    console.log("[DEBUG SERVICE] joinQueue called:", { shopId, customerId, serviceIds });
+    let newItem;
+    newItem = await prisma_1.default.$transaction(async (tx) => {
         // 1. Get Queue and Lock it (Prisma doesn't easily lock rows like SELECT FOR UPDATE without raw query, 
         // but we can rely on atomicity of transaction logic for consistency checks if we re-read).
         // For high concurrency, we'd use raw SQL `SELECT ... FOR UPDATE`.
@@ -103,6 +128,8 @@ const joinQueue = async (shopId, customerId, serviceIds) => {
         });
         if (!shop)
             throw new AppError_1.AppError('Shop not found', 404);
+        if (!shop.queue)
+            throw new AppError_1.AppError('Queue not initialized for this shop', 400);
         const status = (0, shopStatus_1.getShopStatus)(shop);
         if (status !== shop_1.ShopStatus.ACTIVE) {
             if (status === shop_1.ShopStatus.PAUSED)
@@ -151,8 +178,18 @@ const joinQueue = async (shopId, customerId, serviceIds) => {
                 }
             }
         });
+        console.log("[DEBUG SERVICE] Queue item created with tokenNumber:", newItem.tokenNumber);
         return newItem;
     });
+    // Calculate current position after transaction completes (immediate calculation)
+    const currentPosition = await (0, exports.calculateCurrentPosition)(newItem.id);
+    // Return item with currentPosition attached
+    const result = {
+        ...newItem,
+        currentPosition
+    };
+    console.log("[DEBUG SERVICE] Returning joinQueue result with currentPosition:", currentPosition);
+    return result;
 };
 exports.joinQueue = joinQueue;
 const joinWalkIn = async (shopId, walkInName, serviceIds) => {
@@ -223,3 +260,35 @@ const updateQueueItemStatus = async (itemId, status, barberId) => {
     });
 };
 exports.updateQueueItemStatus = updateQueueItemStatus;
+/**
+ * Leave queue - customer cancels their queue entry
+ * Constraints:
+ * - Only the customer who created the item can leave
+ * - Only if status is WAITING (not being served or already completed)
+ * - Marks status as CANCELLED (does NOT delete)
+ */
+const leaveQueue = async (itemId, customerId) => {
+    return await prisma_1.default.$transaction(async (tx) => {
+        const item = await tx.queueItem.findUnique({
+            where: { id: itemId },
+            include: { queue: true }
+        });
+        if (!item)
+            throw new AppError_1.AppError('Queue item not found', 404);
+        // Only the customer who joined can leave
+        if (item.customerId !== customerId) {
+            throw new AppError_1.AppError('You can only leave your own queue entry', 403);
+        }
+        // Can only cancel if in WAITING status
+        if (item.status !== client_1.QueueStatus.WAITING) {
+            throw new AppError_1.AppError('Can only leave queue while waiting. You are already being served or have completed.', 400);
+        }
+        // Mark as CANCELLED instead of deleting
+        const updatedItem = await tx.queueItem.update({
+            where: { id: itemId },
+            data: { status: client_1.QueueStatus.CANCELLED }
+        });
+        return updatedItem;
+    });
+};
+exports.leaveQueue = leaveQueue;

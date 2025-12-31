@@ -14,7 +14,14 @@ export const getQueue = catchAsync(async (req: Request, res: Response, next: Nex
     res.status(200).json({ status: 'success', data: queue });
 });
 
+export const getQueuePreview = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const { shopId } = req.params;
+    const preview = await queueService.getQueuePreview(shopId);
+    res.status(200).json({ status: 'success', data: preview });
+});
+
 export const getMyQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    console.log("[DEBUG] getMyQueue called");
     if (!req.user) return next(new AppError('Unauthorized', 401));
 
     const barber = await prisma.barber.findUnique({
@@ -23,28 +30,35 @@ export const getMyQueue = catchAsync(async (req: Request, res: Response, next: N
 
     if (!barber) return next(new AppError('Barber not found', 404));
 
+    console.log("[DEBUG] Fetching queue for shop:", barber.shopId);
     const queue = await queueService.getShopQueue(barber.shopId, true);
-
+    console.log("[DEBUG] Queue fetched, items count:", queue.items?.length || 0);
 
     res.status(200).json({ status: 'success', data: queue });
 });
 
 export const joinQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    console.log("[DEBUG] joinQueue called");
     const { shopId, serviceIds } = req.body;
+    console.log("[DEBUG] Request body:", { shopId, serviceIds });
 
     // Validate required fields
     if (!shopId || !serviceIds || !Array.isArray(serviceIds)) {
+        console.error("[ERROR] Missing required fields");
         return next(new AppError('shopId and serviceIds array are required', 400));
     }
 
     if (!req.user || req.user.role !== 'CUSTOMER') {
+        console.error("[ERROR] User is not a customer", req.user);
         return next(new AppError('Only customers can join queue', 403));
     }
 
     const customer = await prisma.customer.findUnique({ where: { userId: req.user.id } });
     if (!customer) throw new AppError('Customer profile not found', 404);
 
+    console.log("[DEBUG] Creating queue item for customer:", customer.id);
     const item = await queueService.joinQueue(shopId, customer.id, serviceIds);
+    console.log("[DEBUG] Queue item created:", item);
     
     // Ensure tokenNumber is in response
     res.status(201).json({ 
@@ -172,4 +186,21 @@ export const getMyCustomerQueue = catchAsync(async (req: Request, res: Response,
             fullQueue: fullQueue.items
         }
     });
+});
+
+export const leaveQueue = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user || req.user.role !== 'CUSTOMER') {
+        return next(new AppError('Only customers can leave queue', 403));
+    }
+
+    const { itemId } = req.params;
+
+    const customer = await prisma.customer.findUnique({
+        where: { userId: req.user.id }
+    });
+
+    if (!customer) return next(new AppError('Customer profile not found', 404));
+
+    const item = await queueService.leaveQueue(itemId, customer.id);
+    res.status(200).json({ status: 'success', data: item, message: 'You have left the queue' });
 });
