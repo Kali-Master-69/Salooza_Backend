@@ -34,11 +34,26 @@ const registerUser = async (data, role) => {
             });
         }
         else if (role === client_1.Role.BARBER) {
+            let shopId = otherDetails.shopId;
+            if (!shopId) {
+                // Auto-create a shop for the barber if they don't have one
+                const shop = await tx.shop.create({
+                    data: {
+                        name: `${name}'s Barber Shop`,
+                        openTime: "09:00",
+                        closeTime: "21:00",
+                        queue: {
+                            create: {}
+                        }
+                    }
+                });
+                shopId = shop.id;
+            }
             await tx.barber.create({
                 data: {
                     userId: user.id,
                     name,
-                    shopId: otherDetails.shopId, // Must be provided
+                    shopId: shopId,
                 },
             });
         }

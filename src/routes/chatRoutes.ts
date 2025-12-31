@@ -1,8 +1,8 @@
-import { Router } from 'express';
+import express from 'express';
 import { startConversation, sendMessage, getMessages } from '../controllers/chatController';
 import { protect } from '../middlewares/authMiddleware';
 
-const router = Router();
+const router = express.Router();
 
 router.use(protect);
 

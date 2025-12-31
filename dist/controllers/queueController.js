@@ -36,25 +36,36 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateStatus = exports.joinQueue = exports.getQueue = void 0;
+exports.getMyCustomerQueue = exports.addWalkIn = exports.toggleQueuePause = exports.updateStatus = exports.joinQueue = exports.getMyQueue = exports.getQueue = void 0;
 const catchAsync_1 = require("../utils/catchAsync");
 const queueService = __importStar(require("../services/queueService"));
+const client_1 = require("@prisma/client");
 const AppError_1 = require("../utils/AppError");
 const prisma_1 = __importDefault(require("../utils/prisma"));
+const shopStatus_1 = require("../utils/shopStatus");
+const shop_1 = require("../types/shop");
 exports.getQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     const { shopId } = req.params;
     const queue = await queueService.getShopQueue(shopId);
     res.status(200).json({ status: 'success', data: queue });
 });
+exports.getMyQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user)
+        return next(new AppError_1.AppError('Unauthorized', 401));
+    const barber = await prisma_1.default.barber.findUnique({
+        where: { userId: req.user.id }
+    });
+    if (!barber)
+        return next(new AppError_1.AppError('Barber not found', 404));
+    const queue = await queueService.getShopQueue(barber.shopId, true);
+    res.status(200).json({ status: 'success', data: queue });
+});
 exports.joinQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    const { shopId } = req.body; // or params
-    const { serviceIds } = req.body;
-    if (!req.user) {
-        return next(new AppError_1.AppError('User not authenticated', 401));
+    const { shopId, serviceIds } = req.body;
+    if (!req.user || req.user.role !== 'CUSTOMER') {
+        return next(new AppError_1.AppError('Only customers can join queue', 403));
     }
-    const customerId = req.user.id;
-    // Helper to find customer profile
-    const customer = await prisma_1.default.customer.findUnique({ where: { userId: customerId } });
+    const customer = await prisma_1.default.customer.findUnique({ where: { userId: req.user.id } });
     if (!customer)
         throw new AppError_1.AppError('Customer profile not found', 404);
     const item = await queueService.joinQueue(shopId, customer.id, serviceIds);
@@ -71,4 +82,89 @@ exports.updateStatus = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     }
     const updated = await queueService.updateQueueItemStatus(itemId, status, barberId);
     res.status(200).json({ status: 'success', data: updated });
+});
+exports.toggleQueuePause = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user)
+        return next(new AppError_1.AppError('Unauthorized', 401));
+    const barber = await prisma_1.default.barber.findUnique({
+        where: { userId: req.user.id }
+    });
+    if (!barber)
+        return next(new AppError_1.AppError('Only barbers can manage their queue', 403));
+    // Check shop state
+    const shop = await prisma_1.default.shop.findUnique({
+        where: { id: barber.shopId },
+        include: { services: { include: { durations: true } }, barbers: true, queue: true }
+    });
+    if (!shop)
+        return next(new AppError_1.AppError('Shop not found', 404));
+    const status = (0, shopStatus_1.getShopStatus)(shop);
+    if (status === shop_1.ShopStatus.DRAFT) {
+        return next(new AppError_1.AppError('Setup your shop profile and services before managing the queue', 400));
+    }
+    const { isPaused } = req.body;
+    const queue = await prisma_1.default.queue.update({
+        where: { shopId: barber.shopId },
+        data: { isPaused }
+    });
+    res.status(200).json({ status: 'success', data: queue });
+});
+exports.addWalkIn = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user || req.user.role !== 'BARBER') {
+        return next(new AppError_1.AppError('Only barbers can add walk-ins', 403));
+    }
+    const barber = await prisma_1.default.barber.findUnique({
+        where: { userId: req.user.id }
+    });
+    if (!barber)
+        return next(new AppError_1.AppError('Barber not found', 404));
+    const { walkInName, serviceIds } = req.body;
+    if (!walkInName || !serviceIds || !Array.isArray(serviceIds)) {
+        return next(new AppError_1.AppError('Walk-in name and service IDs are required', 400));
+    }
+    const item = await queueService.joinWalkIn(barber.shopId, walkInName, serviceIds);
+    res.status(201).json({ status: 'success', data: item });
+});
+exports.getMyCustomerQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user || req.user.role !== 'CUSTOMER') {
+        return next(new AppError_1.AppError('Only customers can access their queue status', 403));
+    }
+    const customer = await prisma_1.default.customer.findUnique({
+        where: { userId: req.user.id }
+    });
+    if (!customer)
+        return next(new AppError_1.AppError('Customer profile not found', 404));
+    const item = await prisma_1.default.queueItem.findFirst({
+        where: {
+            customerId: customer.id,
+            status: { in: [client_1.QueueStatus.WAITING, client_1.QueueStatus.SERVING] }
+        },
+        include: {
+            services: { include: { service: true } },
+            queue: { include: { shop: true } }
+        }
+    });
+    if (!item) {
+        return res.status(200).json({ status: 'success', data: null });
+    }
+    // Calculate current position dynamically (not stored in DB)
+    const currentPosition = await queueService.calculateCurrentPosition(item.id);
+    // Get full queue for wait time
+    const fullQueue = await queueService.getShopQueue(item.queue.shopId);
+    const peopleAhead = currentPosition - 1;
+    res.status(200).json({
+        status: 'success',
+        data: {
+            item: {
+                ...item,
+                currentPosition // Add dynamic position to item
+            },
+            shop: item.queue.shop,
+            currentPosition, // Include at top level for convenience
+            tokenNumber: item.tokenNumber, // Keep static token for reference
+            estimatedWaitTime: fullQueue.metrics.estimatedWaitTime,
+            peopleAhead,
+            fullQueue: fullQueue.items
+        }
+    });
 });
