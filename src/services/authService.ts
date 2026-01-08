@@ -2,6 +2,9 @@ import prisma from '../utils/prisma';
 import { hashPassword, signToken, comparePassword } from '../utils/auth';
 import { AppError } from '../utils/AppError';
 import { Role, Prisma } from '@prisma/client';
+import * as customerService from './customerService';
+import * as shopService from './shopService';
+import * as barberService from './barberService';
 
 export const registerUser = async (data: any, role: Role) => {
     const { email, password, name, ...otherDetails } = data;
@@ -24,39 +27,31 @@ export const registerUser = async (data: any, role: Role) => {
         });
 
         if (role === Role.CUSTOMER) {
-            await tx.customer.create({
-                data: {
-                    userId: user.id,
-                    name,
-                    phone: otherDetails.phone,
-                },
-            });
+            await customerService.createCustomer({
+                userId: user.id,
+                name,
+                phone: otherDetails.phone,
+            }, tx);
         } else if (role === Role.BARBER) {
             let shopId = otherDetails.shopId;
 
             if (!shopId) {
-                // Auto-create a shop for the barber if they don't have one
-                const shop = await tx.shop.create({
-                    data: {
-                        name: `${name}'s Barber Shop`,
-                        openTime: "09:00",
-                        closeTime: "21:00",
-                        queue: {
-                            create: {}
-                        }
-                    }
-                });
+                // Auto-create a shop for the barber
+                const shop = await shopService.createShop({
+                    name: `${name}'s Barber Shop`,
+                    openTime: "09:00",
+                    closeTime: "21:00",
+                }, tx);
                 shopId = shop.id;
             }
 
-            await tx.barber.create({
-                data: {
-                    userId: user.id,
-                    name,
-                    shopId: shopId,
-                },
-            });
+            await barberService.createBarber({
+                userId: user.id,
+                name,
+                shopId: shopId,
+            }, tx);
         } else if (role === Role.ADMIN) {
+            // Assume we might have adminService in future
             await tx.admin.create({
                 data: {
                     userId: user.id,
@@ -64,6 +59,7 @@ export const registerUser = async (data: any, role: Role) => {
                 },
             });
         }
+
 
         return user;
     });
@@ -88,3 +84,27 @@ export const loginUser = async (data: any, role: Role) => {
     const token = signToken(user.id, user.role);
     return { user, token };
 };
+
+export const getUserProfile = async (userId: string) => {
+    return await prisma.user.findUnique({
+        where: { id: userId },
+        include: {
+            customer: true,
+            barber: {
+                include: {
+                    shop: {
+                        include: {
+                            services: {
+                                include: {
+                                    durations: true
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            admin: true,
+        },
+    });
+};
+

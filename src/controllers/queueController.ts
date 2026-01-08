@@ -1,9 +1,10 @@
 import { Request, Response, NextFunction } from 'express';
 import { catchAsync } from '../utils/catchAsync';
 import * as queueService from '../services/queueService';
+import * as customerService from '../services/customerService';
+import * as barberService from '../services/barberService';
 import { QueueStatus } from '@prisma/client';
 import { AppError } from '../utils/AppError';
-import prisma from '../utils/prisma';
 import { getShopStatus } from '../utils/shopStatus';
 import { ShopStatus } from '../types/shop';
 
@@ -24,9 +25,7 @@ export const getMyQueue = catchAsync(async (req: Request, res: Response, next: N
     console.log("[DEBUG] getMyQueue called");
     if (!req.user) return next(new AppError('Unauthorized', 401));
 
-    const barber = await prisma.barber.findUnique({
-        where: { userId: req.user.id }
-    });
+    const barber = await barberService.getBarberByUserId(req.user.id);
 
     if (!barber) return next(new AppError('Barber not found', 404));
 
@@ -53,16 +52,16 @@ export const joinQueue = catchAsync(async (req: Request, res: Response, next: Ne
         return next(new AppError('Only customers can join queue', 403));
     }
 
-    const customer = await prisma.customer.findUnique({ where: { userId: req.user.id } });
+    const customer = await customerService.getCustomerByUserId(req.user.id);
     if (!customer) throw new AppError('Customer profile not found', 404);
 
     console.log("[DEBUG] Creating queue item for customer:", customer.id);
     const item = await queueService.joinQueue(shopId, customer.id, serviceIds);
     console.log("[DEBUG] Queue item created:", item);
-    
+
     // Ensure tokenNumber is in response
-    res.status(201).json({ 
-        status: 'success', 
+    res.status(201).json({
+        status: 'success',
         data: {
             ...item,
             tokenNumber: item.tokenNumber
@@ -77,7 +76,7 @@ export const updateStatus = catchAsync(async (req: Request, res: Response, next:
     // Barber ID needed if completing
     let barberId;
     if (req.user?.role === 'BARBER') {
-        const barber = await prisma.barber.findUnique({ where: { userId: req.user.id } });
+        const barber = await barberService.getBarberByUserId(req.user.id);
         barberId = barber?.id;
     }
 
@@ -85,20 +84,17 @@ export const updateStatus = catchAsync(async (req: Request, res: Response, next:
     res.status(200).json({ status: 'success', data: updated });
 });
 
+import * as shopService from '../services/shopService';
+
 export const toggleQueuePause = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) return next(new AppError('Unauthorized', 401));
 
-    const barber = await prisma.barber.findUnique({
-        where: { userId: req.user.id }
-    });
+    const barber = await barberService.getBarberByUserId(req.user.id);
 
     if (!barber) return next(new AppError('Only barbers can manage their queue', 403));
 
     // Check shop state
-    const shop = await prisma.shop.findUnique({
-        where: { id: barber.shopId },
-        include: { services: { include: { durations: true } }, barbers: true, queue: true }
-    });
+    const shop = await shopService.getShopById(barber.shopId);
 
     if (!shop) return next(new AppError('Shop not found', 404));
 
@@ -109,22 +105,18 @@ export const toggleQueuePause = catchAsync(async (req: Request, res: Response, n
 
     const { isPaused } = req.body;
 
+    // Removed the redundant updateShop call and comments
+    const updatedQueue = await queueService.toggleQueuePause(barber.shopId, isPaused);
 
-    const queue = await prisma.queue.update({
-        where: { shopId: barber.shopId },
-        data: { isPaused }
-    });
-
-    res.status(200).json({ status: 'success', data: queue });
+    res.status(200).json({ status: 'success', data: updatedQueue });
 });
+
 export const addWalkIn = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user || req.user.role !== 'BARBER') {
         return next(new AppError('Only barbers can add walk-ins', 403));
     }
 
-    const barber = await prisma.barber.findUnique({
-        where: { userId: req.user.id }
-    });
+    const barber = await barberService.getBarberByUserId(req.user.id);
 
     if (!barber) return next(new AppError('Barber not found', 404));
 
@@ -143,22 +135,11 @@ export const getMyCustomerQueue = catchAsync(async (req: Request, res: Response,
         return next(new AppError('Only customers can access their queue status', 403));
     }
 
-    const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.id }
-    });
+    const customer = await customerService.getCustomerByUserId(req.user.id);
 
     if (!customer) return next(new AppError('Customer profile not found', 404));
 
-    const item = await prisma.queueItem.findFirst({
-        where: {
-            customerId: customer.id,
-            status: { in: [QueueStatus.WAITING, QueueStatus.SERVING] }
-        },
-        include: {
-            services: { include: { service: true } },
-            queue: { include: { shop: true } }
-        }
-    });
+    const item = await queueService.getCustomerActiveQueueItem(customer.id);
 
     if (!item) {
         return res.status(200).json({ status: 'success', data: null });
@@ -195,12 +176,11 @@ export const leaveQueue = catchAsync(async (req: Request, res: Response, next: N
 
     const { itemId } = req.params;
 
-    const customer = await prisma.customer.findUnique({
-        where: { userId: req.user.id }
-    });
+    const customer = await customerService.getCustomerByUserId(req.user.id);
 
     if (!customer) return next(new AppError('Customer profile not found', 404));
 
     const item = await queueService.leaveQueue(itemId, customer.id);
     res.status(200).json({ status: 'success', data: item, message: 'You have left the queue' });
 });
+

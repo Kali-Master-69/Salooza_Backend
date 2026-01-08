@@ -3,6 +3,7 @@ import { AppError } from '../utils/AppError';
 import { QueueStatus, Prisma, ServiceDuration } from '@prisma/client';
 import { getShopStatus } from '../utils/shopStatus';
 import { ShopStatus } from '../types/shop';
+import * as shopService from './shopService';
 
 
 /**
@@ -75,18 +76,15 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
                 },
                 orderBy: { entryTime: 'asc' },
             },
-            shop: {
-                include: {
-                    services: { include: { durations: true } },
-                    barbers: true,
-                },
-            },
         },
     });
 
     if (!queue) throw new AppError('Queue not found for this shop', 404);
 
-    const status = getShopStatus(queue.shop);
+    const shop = await shopService.getShopById(shopId);
+    if (!shop) throw new AppError('Shop not found', 404);
+
+    const status = getShopStatus(shop);
     if (!skipStatusCheck && status !== ShopStatus.ACTIVE && status !== ShopStatus.PAUSED) {
         throw new AppError('This shop is not available for customers', 403);
     }
@@ -94,7 +92,7 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
 
 
     // Calculate wait time
-    const activeBarbersCount = queue.shop.barbers.length;
+    const activeBarbersCount = shop.barbers?.length || 0;
 
     // Filter waiting items
     const waitingItems = queue.items.filter((i: any) => i.status === QueueStatus.WAITING);
@@ -111,6 +109,7 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
 
     return {
         ...queue,
+        shop, // Added full shop details from shopService
         status, // Added shop status
         metrics: {
             activeBarbers: activeBarbersCount,
@@ -123,37 +122,28 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
 
 export const joinQueue = async (shopId: string, customerId: string, serviceIds: string[]) => {
     console.log("[DEBUG SERVICE] joinQueue called:", { shopId, customerId, serviceIds });
-    
+
+    // Check shop state using centralized logic (calling shopService instead of prisma)
+    const shop = await shopService.getShopById(shopId);
+    if (!shop) throw new AppError('Shop not found', 404);
+    if (!shop.queue) throw new AppError('Queue not initialized for this shop', 400);
+
+    const status = getShopStatus(shop);
+    if (status !== ShopStatus.ACTIVE) {
+        if (status === ShopStatus.PAUSED) throw new AppError('Queue is currently paused or no barbers available', 400);
+        if (status === ShopStatus.DRAFT) throw new AppError('Shop is incomplete and cannot accept customers', 400);
+        throw new AppError('Shop is currently closed', 400);
+    }
+
+    const queueId = shop.queue.id;
+
+    // Get durations from shopService
+    const services = await shopService.getServiceDurations(serviceIds);
+    if (services.length !== serviceIds.length) throw new AppError('Invalid services selected', 400);
+
     let newItem;
-    
+
     newItem = await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        // 1. Get Queue and Lock it (Prisma doesn't easily lock rows like SELECT FOR UPDATE without raw query, 
-        // but we can rely on atomicity of transaction logic for consistency checks if we re-read).
-        // For high concurrency, we'd use raw SQL `SELECT ... FOR UPDATE`.
-
-        // Check shop state using centralized logic
-        const shop = await tx.shop.findUnique({
-            where: { id: shopId },
-            include: {
-                queue: true,
-                services: { include: { durations: true } },
-                barbers: true
-            }
-        });
-
-        if (!shop) throw new AppError('Shop not found', 404);
-        if (!shop.queue) throw new AppError('Queue not initialized for this shop', 400);
-
-        const status = getShopStatus(shop);
-        if (status !== ShopStatus.ACTIVE) {
-            if (status === ShopStatus.PAUSED) throw new AppError('Queue is currently paused or no barbers available', 400);
-            if (status === ShopStatus.DRAFT) throw new AppError('Shop is incomplete and cannot accept customers', 400);
-            throw new AppError('Shop is currently closed', 400);
-        }
-
-        const queueId = shop.queue.id;
-
-
         // Check if customer already in queue
         const existingEntry = await tx.queueItem.findFirst({
             where: {
@@ -170,21 +160,8 @@ export const joinQueue = async (shopId: string, customerId: string, serviceIds: 
             where: { queueId },
             orderBy: { tokenNumber: 'desc' }
         });
-        
+
         const nextTokenNumber = (lastItem?.tokenNumber ?? 0) + 1;
-
-        // Calculate current estimate to store snapshot
-        // We re-calculate inside transaction to be safe? 
-        // For simplicity, we assume the snapshot is "current state".
-
-        // Get durations
-        const services = await tx.serviceDuration.findMany({
-            where: { id: { in: serviceIds } }
-        });
-
-        if (services.length !== serviceIds.length) throw new AppError('Invalid services selected', 400);
-
-        const itemDuration = services.reduce((acc: number, s: ServiceDuration) => acc + s.duration, 0);
 
         // Create item
         const newItem = await tx.queueItem.create({
@@ -193,7 +170,7 @@ export const joinQueue = async (shopId: string, customerId: string, serviceIds: 
                 customerId,
                 status: QueueStatus.WAITING,
                 tokenNumber: nextTokenNumber,
-                estimatedWaitTime: 0, // Placeholder, can be updated or calculated dynamically
+                estimatedWaitTime: 0,
                 services: {
                     connect: serviceIds.map(id => ({ id }))
                 }
@@ -206,44 +183,39 @@ export const joinQueue = async (shopId: string, customerId: string, serviceIds: 
 
     // Calculate current position after transaction completes (immediate calculation)
     const currentPosition = await calculateCurrentPosition(newItem.id);
-    
+
     // Return item with currentPosition attached
     const result = {
         ...newItem,
         currentPosition
     };
-    
+
     console.log("[DEBUG SERVICE] Returning joinQueue result with currentPosition:", currentPosition);
     return result;
 };
 
 export const joinWalkIn = async (shopId: string, walkInName: string, serviceIds: string[]) => {
+    // Check shop from shopService
+    const shop = await shopService.getShopById(shopId);
+    if (!shop) throw new AppError('Shop not found', 404);
+    if (!shop.queue) throw new AppError('Queue not initialized for this shop', 400);
+
+    // Get durations from shopService
+    const services = await shopService.getServiceDurations(serviceIds);
+    if (services.length !== serviceIds.length) throw new AppError('Invalid services selected', 400);
+
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
-        const shop = await tx.shop.findUnique({
-            where: { id: shopId },
-            include: { queue: true, services: { include: { durations: true } } }
-        });
-
-        if (!shop) throw new AppError('Shop not found', 404);
-        if (!shop.queue) throw new AppError('Queue not initialized for this shop', 400);
-
         // Calculate token number for walk-in
         const lastItem = await tx.queueItem.findFirst({
-            where: { queueId: shop.queue.id },
+            where: { queueId: shop.queue!.id },
             orderBy: { tokenNumber: 'desc' }
         });
-        
+
         const nextTokenNumber = (lastItem?.tokenNumber ?? 0) + 1;
-
-        const services = await tx.serviceDuration.findMany({
-            where: { id: { in: serviceIds } }
-        });
-
-        if (services.length !== serviceIds.length) throw new AppError('Invalid services selected', 400);
 
         const newItem = await tx.queueItem.create({
             data: {
-                queueId: shop.queue.id,
+                queueId: shop.queue!.id,
                 isWalkIn: true,
                 walkInName,
                 status: QueueStatus.WAITING,
@@ -258,6 +230,9 @@ export const joinWalkIn = async (shopId: string, walkInName: string, serviceIds:
         return newItem;
     });
 };
+
+
+import * as customerService from './customerService';
 
 export const updateQueueItemStatus = async (itemId: string, status: QueueStatus, barberId?: string) => {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
@@ -274,31 +249,43 @@ export const updateQueueItemStatus = async (itemId: string, status: QueueStatus,
         if (status === QueueStatus.COMPLETED && barberId && item.customerId) {
             const totalPrice = item.services.reduce((acc: number, s: any) => acc + Number(s.price), 0);
 
-            await tx.customerVisit.create({
-                data: {
-                    customerId: item.customerId,
-                    barberId: barberId,
-                    startTime: item.entryTime,
-                    endTime: new Date(),
-                    totalPrice,
-                    services: {
-                        connect: item.services.map((s: any) => ({ id: s.id }))
-                    }
+            await customerService.logVisit({
+                customerId: item.customerId,
+                barberId: barberId,
+                startTime: item.entryTime,
+                endTime: new Date(),
+                totalPrice,
+                services: {
+                    connect: item.services.map((s: any) => ({ id: s.id }))
                 }
-            });
+            }, tx);
         }
 
         return updatedItem;
     });
 };
 
-/**
- * Leave queue - customer cancels their queue entry
- * Constraints:
- * - Only the customer who created the item can leave
- * - Only if status is WAITING (not being served or already completed)
- * - Marks status as CANCELLED (does NOT delete)
- */
+
+export const toggleQueuePause = async (shopId: string, isPaused: boolean) => {
+    return await prisma.queue.update({
+        where: { shopId },
+        data: { isPaused }
+    });
+};
+
+export const getCustomerActiveQueueItem = async (customerId: string) => {
+    return await prisma.queueItem.findFirst({
+        where: {
+            customerId,
+            status: { in: [QueueStatus.WAITING, QueueStatus.SERVING] }
+        },
+        include: {
+            services: { include: { service: true } },
+            queue: { include: { shop: true } }
+        }
+    });
+};
+
 export const leaveQueue = async (itemId: string, customerId: string) => {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const item = await tx.queueItem.findUnique({

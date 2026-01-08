@@ -1,10 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { catchAsync } from '../utils/catchAsync';
-import { registerUser, loginUser } from '../services/authService';
+import { registerUser, loginUser, getUserProfile } from '../services/authService';
 import { registerSchema, loginSchema } from '../validators/authValidators';
 import { Role } from '@prisma/client';
 import { AppError } from '../utils/AppError';
-import prisma from '../utils/prisma';
 
 
 export const registerCustomer = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
@@ -42,31 +41,13 @@ export const loginAdmin = catchAsync(async (req: Request, res: Response, next: N
     const { user, token } = await loginUser(data, Role.ADMIN);
     res.status(200).json({ status: 'success', token, data: { user } });
 });
+
 export const getProfile = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) {
         return next(new AppError('User not found', 404));
     }
 
-    const user = await prisma.user.findUnique({
-        where: { id: req.user.id },
-        include: {
-            customer: true,
-            barber: {
-                include: {
-                    shop: {
-                        include: {
-                            services: {
-                                include: {
-                                    durations: true
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            admin: true,
-        },
-    });
+    const user = await getUserProfile(req.user.id);
 
     if (!user) {
         return next(new AppError('User not found', 404));
@@ -79,3 +60,4 @@ export const getProfile = catchAsync(async (req: Request, res: Response, next: N
         },
     });
 });
+
