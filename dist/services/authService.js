@@ -141,11 +141,6 @@ const getUserProfile = async (userId) => {
                 }
             },
             admin: true,
-            barber: {
-                include: {
-                    shop: true
-                }
-            },
         },
     });
 };

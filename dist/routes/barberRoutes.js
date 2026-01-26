@@ -9,8 +9,5 @@ const authMiddleware_1 = require("../middlewares/authMiddleware");
 const client_1 = require("@prisma/client");
 const router = express_1.default.Router();
 router.use(authMiddleware_1.protect);
-// Shop-level availability (Owner only)
-router.patch('/availability/status', (0, authMiddleware_1.restrictTo)(client_1.Role.SHOP_OWNER), availabilityController_1.updateAvailability);
-// Personal-level availability (Barber or Owner)
-router.patch('/barber/availability', (0, authMiddleware_1.restrictTo)(client_1.Role.BARBER, client_1.Role.SHOP_OWNER), availabilityController_1.updateBarberAvailability);
+router.patch('/availability', (0, authMiddleware_1.restrictTo)(client_1.Role.BARBER, client_1.Role.SHOP_OWNER), availabilityController_1.updateBarberAvailability);
 exports.default = router;

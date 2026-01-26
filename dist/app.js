@@ -24,14 +24,23 @@ if (process.env.NODE_ENV === 'development') {
     app.use((0, morgan_1.default)('dev'));
 }
 app.use(express_1.default.json());
+// Debug logging
+app.use((req, res, next) => {
+    console.log(`[SERVER DEBUG] ${new Date().toISOString()} ${req.method} ${req.url}`);
+    next();
+});
 // Routes
+app.get('/api/v1/health', (req, res) => {
+    res.status(200).json({ status: 'success', message: 'Server is running', version: '1.0.1' });
+});
 app.use('/api/v1/auth', authRoutes_1.default);
 app.use('/api/v1/queue', queueRoutes_1.default);
 app.use('/api/v1/services', serviceRoutes_1.default);
-app.use('/api/v1/availability', availabilityRoutes_1.default);
 app.use('/api/v1/chat', chatRoutes_1.default);
 app.use('/api/v1/shops', shopRoutes_1.default);
 app.use('/api/v1/team', teamRoutes_1.default);
+// Mount availability routes directly under /api/v1 to avoid nesting issues
+app.use('/api/v1', availabilityRoutes_1.default);
 // 404
 app.all(/(.*)/, (req, res, next) => {
     next(new AppError_1.AppError(`Can't find ${req.originalUrl} on this server!`, 404));

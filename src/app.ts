@@ -23,14 +23,26 @@ if (process.env.NODE_ENV === 'development') {
 }
 app.use(express.json());
 
+// Debug logging
+app.use((req, res, next) => {
+    console.log(`[SERVER DEBUG] ${new Date().toISOString()} ${req.method} ${req.url}`);
+    next();
+});
+
 // Routes
+app.get('/api/v1/health', (req, res) => {
+    res.status(200).json({ status: 'success', message: 'Server is running', version: '1.0.1' });
+});
+
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/queue', queueRoutes);
 app.use('/api/v1/services', serviceRoutes);
-app.use('/api/v1/availability', availabilityRoutes);
 app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/shops', shopRoutes);
 app.use('/api/v1/team', teamRoutes);
+
+// Mount availability routes directly under /api/v1 to avoid nesting issues
+app.use('/api/v1', availabilityRoutes);
 
 // 404
 app.all(/(.*)/, (req, res, next) => {

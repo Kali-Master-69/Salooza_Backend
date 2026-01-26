@@ -33,20 +33,46 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateAvailability = void 0;
+exports.updateBarberAvailability = exports.updateAvailability = void 0;
 const catchAsync_1 = require("../utils/catchAsync");
 const shopOwnerService = __importStar(require("../services/shopOwnerService"));
+const barberService = __importStar(require("../services/barberService"));
+const shopService = __importStar(require("../services/shopService"));
+const client_1 = require("@prisma/client");
 const AppError_1 = require("../utils/AppError");
 exports.updateAvailability = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     if (!req.user) {
         return next(new AppError_1.AppError('User not authenticated', 401));
     }
-    // Only Shop Owner can update their own availability
-    const shopOwner = await shopOwnerService.getShopOwnerByUserId(req.user.id);
-    if (!shopOwner) {
-        return next(new AppError_1.AppError('Shop Owner profile not found', 404));
+    // Only Shop Owner can update the SHOP availability
+    const shop = await shopService.getShopByUserId(req.user.id);
+    if (!shop) {
+        return next(new AppError_1.AppError('Shop not found for this owner', 404));
+    }
+    const { isAvailable } = req.body; // isAvailable here corresponds to shop's active status
+    const updated = await shopService.updateShop(shop.id, { isActive: isAvailable });
+    res.status(200).json({ status: 'success', data: updated });
+});
+exports.updateBarberAvailability = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user) {
+        return next(new AppError_1.AppError('User not authenticated', 401));
     }
     const { isAvailable } = req.body;
-    const updated = await shopOwnerService.updateShopOwnerAvailability(shopOwner.id, isAvailable);
+    let updated;
+    if (req.user.role === client_1.Role.BARBER) {
+        const barber = await barberService.getBarberByUserId(req.user.id);
+        if (!barber)
+            return next(new AppError_1.AppError('Barber profile not found', 404));
+        updated = await barberService.updateBarberAvailability(barber.id, isAvailable);
+    }
+    else if (req.user.role === client_1.Role.SHOP_OWNER) {
+        const shopOwner = await shopOwnerService.getShopOwnerByUserId(req.user.id);
+        if (!shopOwner)
+            return next(new AppError_1.AppError('Shop Owner profile not found', 404));
+        updated = await shopOwnerService.updateShopOwnerAvailability(shopOwner.id, isAvailable);
+    }
+    else {
+        return next(new AppError_1.AppError('Unauthorized', 403));
+    }
     res.status(200).json({ status: 'success', data: updated });
 });

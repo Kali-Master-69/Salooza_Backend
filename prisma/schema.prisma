@@ -7,6 +7,214 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model User {
+  id        String     @id @default(uuid())
+  email     String     @unique
+  password  String
+  role      Role
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  admin     Admin?
+  barber    Barber?
+  customer  Customer?
+  shopOwner ShopOwner?
+}
+
+model Customer {
+  id            String           @id @default(uuid())
+  userId        String           @unique
+  name          String
+  phone         String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  conversations Conversation[]
+  user          User             @relation(fields: [userId], references: [id])
+  visits        CustomerVisit[]
+  premium       PremiumCustomer?
+  queueItems    QueueItem[]
+}
+
+model ShopOwner {
+  id             String          @id @default(uuid())
+  userId         String          @unique
+  name           String
+  bio            String?
+  isActive       Boolean         @default(true)
+  isAvailable    Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  availabilities Availability[]
+  conversations  Conversation[]
+  servedVisits   CustomerVisit[]
+  shop           Shop?           @relation("ShopOwnerRelation")
+  user           User            @relation(fields: [userId], references: [id])
+}
+
+model Barber {
+  id             String          @id @default(uuid())
+  userId         String          @unique
+  name           String
+  bio            String?
+  isActive       Boolean         @default(true)
+  isAvailable    Boolean         @default(false)
+  shopId         String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  availabilities Availability[]
+  shop           Shop            @relation(fields: [shopId], references: [id])
+  user           User            @relation(fields: [userId], references: [id])
+  conversations  Conversation[]
+  servedVisits   CustomerVisit[]
+}
+
+model Admin {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id])
+}
+
+model Shop {
+  id        String     @id @default(uuid())
+  name      String
+  address   String?
+  openTime  String
+  closeTime String
+  isActive  Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  ownerId   String?    @unique
+  barbers   Barber[]
+  invites   Invite[]
+  queue     Queue?
+  services  Service[]
+  owner     ShopOwner? @relation("ShopOwnerRelation", fields: [ownerId], references: [id])
+}
+
+model Invite {
+  id        String    @id @default(uuid())
+  code      String    @unique
+  shopId    String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  shop      Shop      @relation(fields: [shopId], references: [id])
+}
+
+model Service {
+  id          String            @id @default(uuid())
+  name        String
+  description String?
+  shopId      String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  shop        Shop              @relation(fields: [shopId], references: [id])
+  durations   ServiceDuration[]
+}
+
+model ServiceDuration {
+  id             String          @id @default(uuid())
+  name           String
+  duration       Int
+  price          Decimal
+  serviceId      String
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  service        Service         @relation(fields: [serviceId], references: [id])
+  customerVisits CustomerVisit[] @relation("CustomerVisitToServiceDuration")
+  queueItems     QueueItem[]     @relation("QueueItemToServiceDuration")
+}
+
+model Queue {
+  id        String      @id @default(uuid())
+  shopId    String      @unique
+  isPaused  Boolean     @default(false)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  shop      Shop        @relation(fields: [shopId], references: [id])
+  items     QueueItem[]
+}
+
+model QueueItem {
+  id                String            @id @default(uuid())
+  status            QueueStatus       @default(WAITING)
+  queueId           String
+  customerId        String?
+  estimatedWaitTime Int
+  entryTime         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  isWalkIn          Boolean           @default(false)
+  tokenNumber       Int
+  walkInName        String?
+  customer          Customer?         @relation(fields: [customerId], references: [id])
+  queue             Queue             @relation(fields: [queueId], references: [id])
+  services          ServiceDuration[] @relation("QueueItemToServiceDuration")
+}
+
+model CustomerVisit {
+  id          String            @id @default(uuid())
+  customerId  String
+  startTime   DateTime
+  endTime     DateTime
+  totalPrice  Decimal
+  createdAt   DateTime          @default(now())
+  shopOwnerId String?
+  barberId    String?
+  barber      Barber?           @relation(fields: [barberId], references: [id])
+  customer    Customer          @relation(fields: [customerId], references: [id])
+  shopOwner   ShopOwner?        @relation(fields: [shopOwnerId], references: [id])
+  services    ServiceDuration[] @relation("CustomerVisitToServiceDuration")
+}
+
+model PremiumCustomer {
+  id         String   @id @default(uuid())
+  customerId String   @unique
+  planName   String
+  expiryDate DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  customer   Customer @relation(fields: [customerId], references: [id])
+}
+
+model Availability {
+  id          String     @id @default(uuid())
+  dayOfWeek   Int
+  startTime   String
+  endTime     String
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  shopOwnerId String?
+  barberId    String?
+  barber      Barber?    @relation(fields: [barberId], references: [id])
+  shopOwner   ShopOwner? @relation(fields: [shopOwnerId], references: [id])
+}
+
+model Conversation {
+  id          String     @id @default(uuid())
+  customerId  String
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  shopOwnerId String?
+  barberId    String?
+  barber      Barber?    @relation(fields: [barberId], references: [id])
+  customer    Customer   @relation(fields: [customerId], references: [id])
+  shopOwner   ShopOwner? @relation(fields: [shopOwnerId], references: [id])
+  messages    Message[]
+}
+
+model Message {
+  id             String       @id @default(uuid())
+  conversationId String
+  senderId       String
+  content        String
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+}
+
 enum Role {
   CUSTOMER
   SHOP_OWNER
@@ -20,271 +228,4 @@ enum QueueStatus {
   COMPLETED
   CANCELLED
   SKIPPED
-}
-
-model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  password  String
-  role      Role
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  customer  Customer?
-  shopOwner ShopOwner?
-  barber    Barber?
-  admin     Admin?
-}
-
-model Customer {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id])
-
-  name  String
-  phone String?
-
-  visits        CustomerVisit[]
-  queueItems    QueueItem[]
-  conversations Conversation[]
-  premium       PremiumCustomer?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model ShopOwner {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id])
-
-  name       String
-  bio        String?
-  isActive   Boolean @default(true)
-  isAvailable Boolean @default(true) // Owner can also cut hair
-
-  shop   Shop? @relation("ShopOwnerRelation") // owner of specific shop
-
-  availabilities Availability[]
-  conversations  Conversation[]
-  servedVisits   CustomerVisit[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Barber {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id])
-
-  name       String
-  bio        String?
-  isActive   Boolean @default(true)
-  isAvailable Boolean @default(false)
-
-  shopId String
-  shop   Shop   @relation(fields: [shopId], references: [id])
-
-  availabilities Availability[]
-  conversations  Conversation[]
-  servedVisits   CustomerVisit[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Admin {
-  id     String @id @default(uuid())
-  userId String @unique
-  user   User   @relation(fields: [userId], references: [id])
-
-  name String
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Shop {
-  id      String @id @default(uuid())
-  name    String
-  address String?
-
-  openTime  String // e.g., "09:00"
-  closeTime String // e.g., "18:00"
-  isActive  Boolean @default(true)
-
-  ownerId  String? @unique
-  owner    ShopOwner? @relation("ShopOwnerRelation", fields: [ownerId], references: [id])
-
-  barbers  Barber[]
-  services Service[]
-  queue    Queue?
-  invites  Invite[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Invite {
-  id        String   @id @default(uuid())
-  code      String   @unique
-  shopId    String
-  shop      Shop     @relation(fields: [shopId], references: [id])
-  
-  expiresAt DateTime
-  usedAt    DateTime?
-  
-  createdAt DateTime @default(now())
-}
-
-model Service {
-  id          String @id @default(uuid())
-  name        String
-  description String?
-  
-  shopId String
-  shop   Shop   @relation(fields: [shopId], references: [id])
-
-  durations ServiceDuration[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model ServiceDuration {
-  id        String @id @default(uuid())
-  name      String // e.g., "Short Hair", "Long Hair"
-  duration  Int // in minutes
-  price     Decimal
-
-  serviceId String
-  service   Service @relation(fields: [serviceId], references: [id])
-  
-  queueItems QueueItem[] 
-  
-  customerVisits CustomerVisit[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Queue {
-  id     String @id @default(uuid())
-  shopId String @unique
-  shop   Shop   @relation(fields: [shopId], references: [id])
-
-  isPaused Boolean @default(false)
-  
-  items QueueItem[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model QueueItem {
-  id        String      @id @default(uuid())
-  status    QueueStatus @default(WAITING)
-  
-  queueId String
-  queue   Queue @relation(fields: [queueId], references: [id])
-
-  customerId String?
-  customer   Customer? @relation(fields: [customerId], references: [id])
-
-  isWalkIn   Boolean @default(false)
-  walkInName String?
-
-  // Token number for display (like #1, #2, #3)
-  tokenNumber Int
-
-  // Snapshot of expected time
-  estimatedWaitTime Int // in minutes at time of joining
-  
-  // Relations to services selected
-  services ServiceDuration[]
-
-  entryTime DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model CustomerVisit {
-  id         String   @id @default(uuid())
-  customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
-
-  shopOwnerId String?
-  shopOwner   ShopOwner? @relation(fields: [shopOwnerId], references: [id])
-
-  barberId    String?
-  barber      Barber?    @relation(fields: [barberId], references: [id])
-
-  services ServiceDuration[]
-
-  startTime DateTime
-  endTime   DateTime
-  
-  totalPrice Decimal
-  
-  createdAt DateTime @default(now())
-}
-
-model PremiumCustomer {
-  id         String   @id @default(uuid())
-  customerId String   @unique
-  customer   Customer @relation(fields: [customerId], references: [id])
-
-  planName   String
-  expiryDate DateTime
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Availability {
-  id       String @id @default(uuid())
-  
-  shopOwnerId String?
-  shopOwner   ShopOwner? @relation(fields: [shopOwnerId], references: [id])
-
-  barberId    String?
-  barber      Barber?    @relation(fields: [barberId], references: [id])
-
-  dayOfWeek Int // 0-6
-  startTime String
-  endTime   String
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Conversation {
-  id         String   @id @default(uuid())
-  customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
-
-  shopOwnerId String?
-  shopOwner   ShopOwner? @relation(fields: [shopOwnerId], references: [id])
-
-  barberId    String?
-  barber      Barber?    @relation(fields: [barberId], references: [id])
-
-  isActive Boolean @default(true)
-
-  messages Message[]
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-}
-
-model Message {
-  id             String       @id @default(uuid())
-  conversationId String
-  conversation   Conversation @relation(fields: [conversationId], references: [id])
-
-  senderId   String // User ID of sender
-  content    String
-  isRead     Boolean @default(false)
-
-  createdAt DateTime @default(now())
 }
