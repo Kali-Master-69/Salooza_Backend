@@ -6,6 +6,6 @@ import { Role } from '@prisma/client';
 const router = express.Router();
 
 router.use(protect);
-router.patch('/status', restrictTo(Role.BARBER), updateAvailability);
+router.patch('/status', restrictTo(Role.SHOP_OWNER), updateAvailability);
 
 export default router;

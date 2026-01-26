@@ -36,173 +36,115 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.leaveQueue = exports.getMyCustomerQueue = exports.addWalkIn = exports.toggleQueuePause = exports.updateStatus = exports.joinQueue = exports.getMyQueue = exports.getQueuePreview = exports.getQueue = void 0;
+exports.getQueuePreview = exports.leaveQueue = exports.getMyCustomerQueue = exports.toggleQueuePause = exports.updateStatus = exports.addWalkIn = exports.joinQueue = exports.getMyQueue = exports.getQueue = void 0;
 const catchAsync_1 = require("../utils/catchAsync");
-const queueService = __importStar(require("../services/queueService"));
-const client_1 = require("@prisma/client");
 const AppError_1 = require("../utils/AppError");
+const queueService = __importStar(require("../services/queueService"));
+const shopService = __importStar(require("../services/shopService"));
+const shopOwnerService = __importStar(require("../services/shopOwnerService"));
 const prisma_1 = __importDefault(require("../utils/prisma"));
-const shopStatus_1 = require("../utils/shopStatus");
-const shop_1 = require("../types/shop");
+const client_1 = require("@prisma/client");
 exports.getQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     const { shopId } = req.params;
     const queue = await queueService.getShopQueue(shopId);
     res.status(200).json({ status: 'success', data: queue });
 });
-exports.getQueuePreview = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    const { shopId } = req.params;
-    const preview = await queueService.getQueuePreview(shopId);
-    res.status(200).json({ status: 'success', data: preview });
-});
 exports.getMyQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    console.log("[DEBUG] getMyQueue called");
     if (!req.user)
         return next(new AppError_1.AppError('Unauthorized', 401));
-    const barber = await prisma_1.default.barber.findUnique({
-        where: { userId: req.user.id }
-    });
-    if (!barber)
-        return next(new AppError_1.AppError('Barber not found', 404));
-    console.log("[DEBUG] Fetching queue for shop:", barber.shopId);
-    const queue = await queueService.getShopQueue(barber.shopId, true);
-    console.log("[DEBUG] Queue fetched, items count:", queue.items?.length || 0);
+    const shop = await shopService.getShopByUserId(req.user.id);
+    if (!shop)
+        return next(new AppError_1.AppError('Shop not found for this user', 404));
+    // skipStatusCheck = true because owner/barber should see queue even if PAUSED or CLOSED
+    const queue = await queueService.getShopQueue(shop.id, true);
     res.status(200).json({ status: 'success', data: queue });
 });
 exports.joinQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    console.log("[DEBUG] joinQueue called");
-    const { shopId, serviceIds } = req.body;
-    console.log("[DEBUG] Request body:", { shopId, serviceIds });
-    // Validate required fields
-    if (!shopId || !serviceIds || !Array.isArray(serviceIds)) {
-        console.error("[ERROR] Missing required fields");
-        return next(new AppError_1.AppError('shopId and serviceIds array are required', 400));
-    }
-    if (!req.user || req.user.role !== 'CUSTOMER') {
-        console.error("[ERROR] User is not a customer", req.user);
-        return next(new AppError_1.AppError('Only customers can join queue', 403));
-    }
+    if (!req.user)
+        return next(new AppError_1.AppError('Unauthorized', 401));
     const customer = await prisma_1.default.customer.findUnique({ where: { userId: req.user.id } });
     if (!customer)
-        throw new AppError_1.AppError('Customer profile not found', 404);
-    console.log("[DEBUG] Creating queue item for customer:", customer.id);
+        return next(new AppError_1.AppError('Customer profile not found', 404));
+    const { shopId, serviceIds } = req.body;
+    if (!shopId || !serviceIds || !Array.isArray(serviceIds)) {
+        return next(new AppError_1.AppError('Please provide shopId and serviceIds', 400));
+    }
     const item = await queueService.joinQueue(shopId, customer.id, serviceIds);
-    console.log("[DEBUG] Queue item created:", item);
-    // Ensure tokenNumber is in response
-    res.status(201).json({
-        status: 'success',
-        data: {
-            ...item,
-            tokenNumber: item.tokenNumber
-        }
-    });
+    res.status(201).json({ status: 'success', data: item });
+});
+exports.addWalkIn = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    if (!req.user)
+        return next(new AppError_1.AppError('Unauthorized', 401));
+    const shop = await shopService.getShopByUserId(req.user.id);
+    if (!shop)
+        return next(new AppError_1.AppError('Shop not found for this user', 404));
+    const { name, serviceIds } = req.body;
+    if (!name || !serviceIds || !Array.isArray(serviceIds)) {
+        return next(new AppError_1.AppError('Please provide name and serviceIds', 400));
+    }
+    const item = await queueService.joinWalkIn(shop.id, name, serviceIds);
+    res.status(201).json({ status: 'success', data: item });
 });
 exports.updateStatus = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     const { itemId } = req.params;
     const { status } = req.body;
-    // Barber ID needed if completing
+    if (!Object.values(client_1.QueueStatus).includes(status)) {
+        return next(new AppError_1.AppError('Invalid status', 400));
+    }
+    let shopOwnerId;
     let barberId;
-    if (req.user?.role === 'BARBER') {
+    if (req.user?.role === 'SHOP_OWNER') {
+        const owner = await shopOwnerService.getShopOwnerByUserId(req.user.id);
+        shopOwnerId = owner?.id;
+    }
+    else if (req.user?.role === 'BARBER') {
         const barber = await prisma_1.default.barber.findUnique({ where: { userId: req.user.id } });
         barberId = barber?.id;
     }
-    const updated = await queueService.updateQueueItemStatus(itemId, status, barberId);
+    // Pass both. One might be undefined.
+    const updated = await queueService.updateQueueItemStatus(itemId, status, shopOwnerId, barberId);
     res.status(200).json({ status: 'success', data: updated });
 });
 exports.toggleQueuePause = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
     if (!req.user)
         return next(new AppError_1.AppError('Unauthorized', 401));
-    const barber = await prisma_1.default.barber.findUnique({
-        where: { userId: req.user.id }
-    });
-    if (!barber)
-        return next(new AppError_1.AppError('Only barbers can manage their queue', 403));
-    // Check shop state
-    const shop = await prisma_1.default.shop.findUnique({
-        where: { id: barber.shopId },
-        include: { services: { include: { durations: true } }, barbers: true, queue: true }
-    });
+    const shop = await shopService.getShopByUserId(req.user.id);
     if (!shop)
-        return next(new AppError_1.AppError('Shop not found', 404));
-    const status = (0, shopStatus_1.getShopStatus)(shop);
-    if (status === shop_1.ShopStatus.DRAFT) {
-        return next(new AppError_1.AppError('Setup your shop profile and services before managing the queue', 400));
-    }
+        return next(new AppError_1.AppError('Shop not found for this user', 404));
+    // Only shop owner can pause? 
+    // Logic in service checks shopId, but typically only Owner should call this.
+    // The route restriction handles Role check.
     const { isPaused } = req.body;
-    const queue = await prisma_1.default.queue.update({
-        where: { shopId: barber.shopId },
-        data: { isPaused }
-    });
-    res.status(200).json({ status: 'success', data: queue });
-});
-exports.addWalkIn = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    if (!req.user || req.user.role !== 'BARBER') {
-        return next(new AppError_1.AppError('Only barbers can add walk-ins', 403));
-    }
-    const barber = await prisma_1.default.barber.findUnique({
-        where: { userId: req.user.id }
-    });
-    if (!barber)
-        return next(new AppError_1.AppError('Barber not found', 404));
-    const { walkInName, serviceIds } = req.body;
-    if (!walkInName || !serviceIds || !Array.isArray(serviceIds)) {
-        return next(new AppError_1.AppError('Walk-in name and service IDs are required', 400));
-    }
-    const item = await queueService.joinWalkIn(barber.shopId, walkInName, serviceIds);
-    res.status(201).json({ status: 'success', data: item });
+    if (typeof isPaused !== 'boolean')
+        return next(new AppError_1.AppError('isPaused must be boolean', 400));
+    const updated = await queueService.toggleQueuePause(shop.id, isPaused);
+    res.status(200).json({ status: 'success', data: updated });
 });
 exports.getMyCustomerQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    if (!req.user || req.user.role !== 'CUSTOMER') {
-        return next(new AppError_1.AppError('Only customers can access their queue status', 403));
-    }
-    const customer = await prisma_1.default.customer.findUnique({
-        where: { userId: req.user.id }
-    });
+    if (!req.user)
+        return next(new AppError_1.AppError('Unauthorized', 401));
+    const customer = await prisma_1.default.customer.findUnique({ where: { userId: req.user.id } });
     if (!customer)
-        return next(new AppError_1.AppError('Customer profile not found', 404));
-    const item = await prisma_1.default.queueItem.findFirst({
-        where: {
-            customerId: customer.id,
-            status: { in: [client_1.QueueStatus.WAITING, client_1.QueueStatus.SERVING] }
-        },
-        include: {
-            services: { include: { service: true } },
-            queue: { include: { shop: true } }
-        }
-    });
-    if (!item) {
-        return res.status(200).json({ status: 'success', data: null });
-    }
-    // Calculate current position dynamically (not stored in DB)
-    const currentPosition = await queueService.calculateCurrentPosition(item.id);
-    // Get full queue for wait time
-    const fullQueue = await queueService.getShopQueue(item.queue.shopId);
-    const peopleAhead = currentPosition - 1;
+        return next(new AppError_1.AppError('Customer not found', 404));
+    const item = await queueService.getCustomerActiveQueueItem(customer.id);
     res.status(200).json({
         status: 'success',
-        data: {
-            item: {
-                ...item,
-                currentPosition // Add dynamic position to item
-            },
-            shop: item.queue.shop,
-            currentPosition, // Include at top level for convenience
-            tokenNumber: item.tokenNumber, // Keep static token for reference
-            estimatedWaitTime: fullQueue.metrics.estimatedWaitTime,
-            peopleAhead,
-            fullQueue: fullQueue.items
-        }
+        data: item // Can be null if not in queue
     });
 });
 exports.leaveQueue = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    if (!req.user || req.user.role !== 'CUSTOMER') {
-        return next(new AppError_1.AppError('Only customers can leave queue', 403));
-    }
     const { itemId } = req.params;
-    const customer = await prisma_1.default.customer.findUnique({
-        where: { userId: req.user.id }
-    });
+    if (!req.user)
+        return next(new AppError_1.AppError('Unauthorized', 401));
+    const customer = await prisma_1.default.customer.findUnique({ where: { userId: req.user.id } });
     if (!customer)
-        return next(new AppError_1.AppError('Customer profile not found', 404));
-    const item = await queueService.leaveQueue(itemId, customer.id);
-    res.status(200).json({ status: 'success', data: item, message: 'You have left the queue' });
+        return next(new AppError_1.AppError('Customer not found', 404));
+    // Service checks if item belongs to customer
+    await queueService.leaveQueue(itemId, customer.id);
+    res.status(200).json({ status: 'success', data: null });
+});
+exports.getQueuePreview = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
+    const { shopId } = req.params;
+    const preview = await queueService.getQueuePreview(shopId);
+    res.status(200).json({ status: 'success', data: preview });
 });

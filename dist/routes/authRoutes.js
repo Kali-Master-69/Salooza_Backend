@@ -10,16 +10,16 @@ const router = express_1.default.Router();
 // Customer routes
 router.post('/customer/register', authController_1.registerCustomer);
 router.post('/customer/login', authController_1.loginCustomer);
-// Barber routes
-router.post('/barber/register', authController_1.registerBarber);
-router.post('/barber/login', authController_1.loginBarber);
+// Barber routes (mapped to Shop Owner for backward compatibility of routes)
+router.post('/barber/register', authController_1.registerShopOwner);
+router.post('/barber/login', authController_1.loginShopOwner);
 // Admin routes
 router.post('/admin/register', authController_1.registerAdmin);
 router.post('/admin/login', authController_1.loginAdmin);
 // Standard auth routes - keeping these for backward compatibility if needed, 
 // but mapping them to customer as default
 router.post('/signup', authController_1.registerCustomer);
-router.post('/login', authController_1.loginCustomer);
+router.post('/login', authController_1.loginCommon);
 router.use(authMiddleware_1.protect);
 router.get('/profile', authController_1.getProfile);
 exports.default = router;

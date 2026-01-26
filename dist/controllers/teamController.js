@@ -33,20 +33,49 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.updateAvailability = void 0;
-const catchAsync_1 = require("../utils/catchAsync");
-const shopOwnerService = __importStar(require("../services/shopOwnerService"));
+exports.acceptInvite = exports.validateInvite = exports.createInvite = void 0;
+const teamService = __importStar(require("../services/teamService"));
 const AppError_1 = require("../utils/AppError");
-exports.updateAvailability = (0, catchAsync_1.catchAsync)(async (req, res, next) => {
-    if (!req.user) {
-        return next(new AppError_1.AppError('User not authenticated', 401));
-    }
-    // Only Shop Owner can update their own availability
-    const shopOwner = await shopOwnerService.getShopOwnerByUserId(req.user.id);
-    if (!shopOwner) {
-        return next(new AppError_1.AppError('Shop Owner profile not found', 404));
-    }
-    const { isAvailable } = req.body;
-    const updated = await shopOwnerService.updateShopOwnerAvailability(shopOwner.id, isAvailable);
-    res.status(200).json({ status: 'success', data: updated });
+// Quick helper if catchAsync is not exported (it was used in authController)
+// Re-implementing just in case import fails or to be safe
+const catchAsyncFn = (fn) => {
+    return (req, res, next) => {
+        fn(req, res, next).catch(next);
+    };
+};
+exports.createInvite = catchAsyncFn(async (req, res, next) => {
+    // Assumes protect middleware has run and req.user exists
+    if (!req.user)
+        return next(new AppError_1.AppError('Not authenticated', 401));
+    const result = await teamService.generateInvite(req.user.id);
+    res.status(201).json({
+        status: 'success',
+        data: result
+    });
+});
+exports.validateInvite = catchAsyncFn(async (req, res, next) => {
+    const { code } = req.params;
+    const result = await teamService.validateInvite(code);
+    res.status(200).json({
+        status: 'success',
+        data: result
+    });
+});
+exports.acceptInvite = catchAsyncFn(async (req, res, next) => {
+    const { code } = req.params;
+    const { email, password, name, phone } = req.body;
+    const result = await teamService.acceptBarberInvite(code, {
+        email,
+        password,
+        name,
+        phone
+    });
+    res.status(201).json({
+        status: 'success',
+        token: result.token,
+        data: {
+            user: result.user,
+            barber: result.barber
+        }
+    });
 });

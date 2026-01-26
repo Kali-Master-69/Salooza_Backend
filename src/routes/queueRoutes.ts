@@ -10,13 +10,13 @@ router.get('/:shopId/preview', getQueuePreview);
 
 router.use(protect);
 
-router.get('/my-queue', restrictTo(Role.BARBER), getMyQueue);
+router.get('/my-queue', restrictTo(Role.SHOP_OWNER, Role.BARBER), getMyQueue);
 router.get('/customer-status', restrictTo(Role.CUSTOMER), getMyCustomerQueue);
 router.post('/join', restrictTo(Role.CUSTOMER), joinQueue);
-router.post('/walk-in', restrictTo(Role.BARBER), addWalkIn);
-router.patch('/pause', restrictTo(Role.BARBER), toggleQueuePause);
+router.post('/walk-in', restrictTo(Role.SHOP_OWNER, Role.BARBER), addWalkIn);
+router.patch('/pause', restrictTo(Role.SHOP_OWNER), toggleQueuePause);
 router.delete('/:itemId/leave', restrictTo(Role.CUSTOMER), leaveQueue);
 router.get('/:shopId', getQueue);
-router.patch('/:itemId/status', restrictTo(Role.BARBER, Role.ADMIN), updateStatus);
+router.patch('/:itemId/status', restrictTo(Role.SHOP_OWNER, Role.ADMIN, Role.BARBER), updateStatus);
 
 export default router;

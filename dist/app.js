@@ -15,7 +15,7 @@ const serviceRoutes_1 = __importDefault(require("./routes/serviceRoutes"));
 const availabilityRoutes_1 = __importDefault(require("./routes/availabilityRoutes"));
 const chatRoutes_1 = __importDefault(require("./routes/chatRoutes"));
 const shopRoutes_1 = __importDefault(require("./routes/shopRoutes"));
-// Import other routes later
+const teamRoutes_1 = __importDefault(require("./routes/teamRoutes"));
 const app = (0, express_1.default)();
 // Global Middlewares
 app.use((0, helmet_1.default)());
@@ -31,6 +31,7 @@ app.use('/api/v1/services', serviceRoutes_1.default);
 app.use('/api/v1/availability', availabilityRoutes_1.default);
 app.use('/api/v1/chat', chatRoutes_1.default);
 app.use('/api/v1/shops', shopRoutes_1.default);
+app.use('/api/v1/team', teamRoutes_1.default);
 // 404
 app.all(/(.*)/, (req, res, next) => {
     next(new AppError_1.AppError(`Can't find ${req.originalUrl} on this server!`, 404));

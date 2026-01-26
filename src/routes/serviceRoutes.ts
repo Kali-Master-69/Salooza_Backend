@@ -9,9 +9,9 @@ const router = express.Router();
 router.get('/:shopId', getServices);
 
 router.use(protect);
-router.post('/', restrictTo(Role.ADMIN, Role.BARBER), createService);
-router.patch('/:id', restrictTo(Role.ADMIN, Role.BARBER), updateService);
-router.delete('/:id', restrictTo(Role.ADMIN, Role.BARBER), deleteService);
+router.post('/', restrictTo(Role.ADMIN, Role.SHOP_OWNER), createService);
+router.patch('/:id', restrictTo(Role.ADMIN, Role.SHOP_OWNER), updateService);
+router.delete('/:id', restrictTo(Role.ADMIN, Role.SHOP_OWNER), deleteService);
 
 
 export default router;

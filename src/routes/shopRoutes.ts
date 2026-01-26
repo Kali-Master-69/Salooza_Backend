@@ -8,11 +8,11 @@ import { Role } from '@prisma/client';
 const router = express.Router();
 
 router.get('/', getShops);
-router.get('/my-shop', protect, restrictTo(Role.BARBER), getMyShop);
+router.get('/my-shop', protect, restrictTo(Role.SHOP_OWNER, Role.BARBER), getMyShop);
 router.get('/:id', getShop);
 
 router.use(protect);
-router.patch('/my-shop', restrictTo(Role.BARBER), updateShop);
+router.patch('/my-shop', restrictTo(Role.SHOP_OWNER), updateShop);
 router.post('/', restrictTo(Role.ADMIN), createShop);
 
 export default router;

@@ -2,15 +2,14 @@ import { Request, Response, NextFunction } from 'express';
 import { catchAsync } from '../utils/catchAsync';
 import { AppError } from '../utils/AppError';
 import * as shopService from '../services/shopService';
-import * as barberService from '../services/barberService';
 
 export const createService = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     let { shopId, name, description, durations } = req.body;
 
-    if (req.user?.role === 'BARBER') {
-        const barber = await barberService.getBarberByUserId(req.user.id);
-        if (!barber) return next(new AppError('Barber not found', 404));
-        shopId = barber.shopId;
+    if (req.user?.role === 'SHOP_OWNER') {
+        const shop = await shopService.getShopByUserId(req.user.id);
+        if (!shop) return next(new AppError('Shop not found for this owner', 404));
+        shopId = shop.id;
     }
 
     if (!shopId) return next(new AppError('Shop ID is required', 400));
@@ -32,10 +31,10 @@ export const updateService = catchAsync(async (req: Request, res: Response, next
     const service = await shopService.getServiceById(id);
     if (!service) return next(new AppError('Service not found', 404));
 
-    // Security: Check if barber owns the shop
-    if (req.user?.role === 'BARBER') {
-        const barber = await barberService.getBarberByUserId(req.user.id);
-        if (!barber || barber.shopId !== service.shopId) {
+    // Security: Check if shop owner owns the shop
+    if (req.user?.role === 'SHOP_OWNER') {
+        const shop = await shopService.getShopByUserId(req.user.id);
+        if (!shop || shop.id !== service.shopId) {
             return next(new AppError('Unauthorized', 403));
         }
     }
@@ -51,9 +50,9 @@ export const deleteService = catchAsync(async (req: Request, res: Response, next
     const service = await shopService.getServiceById(id);
     if (!service) return next(new AppError('Service not found', 404));
 
-    if (req.user?.role === 'BARBER') {
-        const barber = await barberService.getBarberByUserId(req.user.id);
-        if (!barber || barber.shopId !== service.shopId) {
+    if (req.user?.role === 'SHOP_OWNER') {
+        const shop = await shopService.getShopByUserId(req.user.id);
+        if (!shop || shop.id !== service.shopId) {
             return next(new AppError('Unauthorized', 403));
         }
     }
@@ -69,4 +68,3 @@ export const getServices = catchAsync(async (req: Request, res: Response, next: 
     const services = await shopService.getServicesByShopId(shopId);
     res.status(200).json({ status: 'success', data: services });
 });
-

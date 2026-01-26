@@ -18,15 +18,15 @@ export const loginCustomer = catchAsync(async (req: Request, res: Response, next
     res.status(200).json({ status: 'success', token, data: { user } });
 });
 
-export const registerBarber = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
-    const data = registerSchema.parse({ ...req.body, role: 'BARBER' });
-    const { user, token } = await registerUser(data, Role.BARBER);
+export const registerShopOwner = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const data = registerSchema.parse({ ...req.body, role: 'SHOP_OWNER' });
+    const { user, token } = await registerUser(data, Role.SHOP_OWNER);
     res.status(201).json({ status: 'success', token, data: { user } });
 });
 
-export const loginBarber = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+export const loginShopOwner = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const data = loginSchema.parse(req.body);
-    const { user, token } = await loginUser(data, Role.BARBER);
+    const { user, token } = await loginUser(data, Role.SHOP_OWNER);
     res.status(200).json({ status: 'success', token, data: { user } });
 });
 
@@ -39,6 +39,13 @@ export const registerAdmin = catchAsync(async (req: Request, res: Response, next
 export const loginAdmin = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     const data = loginSchema.parse(req.body);
     const { user, token } = await loginUser(data, Role.ADMIN);
+    res.status(200).json({ status: 'success', token, data: { user } });
+});
+
+export const loginCommon = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
+    const data = loginSchema.parse(req.body);
+    // Don't pass role, allowing auto-detection
+    const { user, token } = await loginUser(data);
     res.status(200).json({ status: 'success', token, data: { user } });
 });
 
@@ -60,4 +67,3 @@ export const getProfile = catchAsync(async (req: Request, res: Response, next: N
         },
     });
 });
-

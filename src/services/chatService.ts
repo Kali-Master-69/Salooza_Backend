@@ -1,11 +1,11 @@
 import prisma from '../utils/prisma';
 import { AppError } from '../utils/AppError';
 
-export const startConversation = async (customerId: string, barberId: string) => {
+export const startConversation = async (customerId: string, shopOwnerId: string) => {
     return await prisma.conversation.create({
         data: {
             customerId,
-            barberId,
+            shopOwnerId,
         }
     });
 };

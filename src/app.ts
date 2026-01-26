@@ -11,7 +11,7 @@ import serviceRoutes from './routes/serviceRoutes';
 import availabilityRoutes from './routes/availabilityRoutes';
 import chatRoutes from './routes/chatRoutes';
 import shopRoutes from './routes/shopRoutes';
-// Import other routes later
+import teamRoutes from './routes/teamRoutes';
 
 const app = express();
 
@@ -30,6 +30,7 @@ app.use('/api/v1/services', serviceRoutes);
 app.use('/api/v1/availability', availabilityRoutes);
 app.use('/api/v1/chat', chatRoutes);
 app.use('/api/v1/shops', shopRoutes);
+app.use('/api/v1/team', teamRoutes);
 
 // 404
 app.all(/(.*)/, (req, res, next) => {

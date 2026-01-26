@@ -10,7 +10,11 @@ export const startConversation = catchAsync(async (req: Request, res: Response, 
         return next(new AppError('User not authenticated', 401));
     }
 
-    const { barberId } = req.body;
+    const { barberId, shopOwnerId } = req.body;
+    const targetId = shopOwnerId || barberId; // Support both for transition
+
+    if (!targetId) return next(new AppError('Shop Owner ID (or barberId) is required', 400));
+
     const customerId = req.user.id;
 
     const customer = await customerService.getCustomerByUserId(customerId);
@@ -22,7 +26,7 @@ export const startConversation = catchAsync(async (req: Request, res: Response, 
     // Flexible for now: Allow if customer is in queue or has history.
     // For now we just use the customer check.
 
-    const conversation = await chatService.startConversation(customer.id, barberId);
+    const conversation = await chatService.startConversation(customer.id, targetId);
 
     res.status(201).json({ status: 'success', data: conversation });
 });
@@ -47,4 +51,3 @@ export const getMessages = catchAsync(async (req: Request, res: Response, next: 
 
     res.status(200).json({ status: 'success', data: messages });
 });
-

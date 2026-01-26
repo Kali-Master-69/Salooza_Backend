@@ -57,14 +57,11 @@ export const getShop = catchAsync(async (req: Request, res: Response, next: Next
 export const updateShop = catchAsync(async (req: Request, res: Response, next: NextFunction) => {
     if (!req.user) return next(new AppError('Unauthorized', 401));
 
-    // We still check if the user is a barber here or we can move it to middleware/service
-    // For now, let's keep it simple.
+    // Check if the user is a shop owner
     const shop = await shopService.getShopByUserId(req.user.id);
-    if (!shop) return next(new AppError('Only barbers can update their shop', 403));
+    if (!shop) return next(new AppError('Only shop owners can update their shop', 403));
 
     const updatedShop = await shopService.updateShop(shop.id, req.body);
 
     res.status(200).json({ status: 'success', data: updatedShop });
 });
-
-

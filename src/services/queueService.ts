@@ -1,6 +1,6 @@
 import prisma from '../utils/prisma';
 import { AppError } from '../utils/AppError';
-import { QueueStatus, Prisma, ServiceDuration } from '@prisma/client';
+import { QueueStatus, Prisma, ServiceDuration, Shop, Barber, ShopOwner } from '@prisma/client';
 import { getShopStatus } from '../utils/shopStatus';
 import { ShopStatus } from '../types/shop';
 import * as shopService from './shopService';
@@ -92,7 +92,10 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
 
 
     // Calculate wait time
-    const activeBarbersCount = shop.barbers?.length || 0;
+    // shop.owner is singular, shop.barbers is array
+    const activeOwnerCount = (shop.owner?.isAvailable) ? 1 : 0;
+    const activeBarberCount = shop.barbers?.filter(b => b.isAvailable).length || 0;
+    const activeStaffCount = activeOwnerCount + activeBarberCount;
 
     // Filter waiting items
     const waitingItems = queue.items.filter((i: any) => i.status === QueueStatus.WAITING);
@@ -103,16 +106,16 @@ export const getShopQueue = async (shopId: string, skipStatusCheck: boolean = fa
         totalServiceTime += itemDuration;
     });
 
-    const estimatedWaitTime = activeBarbersCount > 0
-        ? Math.ceil(totalServiceTime / activeBarbersCount)
-        : totalServiceTime; // Fallback if no barbers active (maybe shop closed)
+    const estimatedWaitTime = activeStaffCount > 0
+        ? Math.ceil(totalServiceTime / activeStaffCount)
+        : totalServiceTime; // Fallback if no shop owners active (maybe shop closed)
 
     return {
         ...queue,
         shop, // Added full shop details from shopService
         status, // Added shop status
         metrics: {
-            activeBarbers: activeBarbersCount,
+            activeBarbers: activeStaffCount, // Keep frontend key compatible for now
             customersWaiting: waitingItems.length,
             estimatedWaitTime,
         }
@@ -130,7 +133,7 @@ export const joinQueue = async (shopId: string, customerId: string, serviceIds: 
 
     const status = getShopStatus(shop);
     if (status !== ShopStatus.ACTIVE) {
-        if (status === ShopStatus.PAUSED) throw new AppError('Queue is currently paused or no barbers available', 400);
+        if (status === ShopStatus.PAUSED) throw new AppError('Queue is currently paused or no shop owner available', 400);
         if (status === ShopStatus.DRAFT) throw new AppError('Shop is incomplete and cannot accept customers', 400);
         throw new AppError('Shop is currently closed', 400);
     }
@@ -234,7 +237,7 @@ export const joinWalkIn = async (shopId: string, walkInName: string, serviceIds:
 
 import * as customerService from './customerService';
 
-export const updateQueueItemStatus = async (itemId: string, status: QueueStatus, barberId?: string) => {
+export const updateQueueItemStatus = async (itemId: string, status: QueueStatus, shopOwnerId?: string, barberId?: string) => {
     return await prisma.$transaction(async (tx: Prisma.TransactionClient) => {
         const item = await tx.queueItem.findUnique({ where: { id: itemId }, include: { services: true } });
         if (!item) throw new AppError('Item not found', 404);
@@ -246,12 +249,13 @@ export const updateQueueItemStatus = async (itemId: string, status: QueueStatus,
         });
 
         // If COMPLETED, log visit (only if customerId exists)
-        if (status === QueueStatus.COMPLETED && barberId && item.customerId) {
+        if (status === QueueStatus.COMPLETED && (shopOwnerId || barberId) && item.customerId) {
             const totalPrice = item.services.reduce((acc: number, s: any) => acc + Number(s.price), 0);
 
             await customerService.logVisit({
                 customerId: item.customerId,
-                barberId: barberId,
+                shopOwnerId: shopOwnerId || null,
+                barberId: barberId || null,
                 startTime: item.entryTime,
                 endTime: new Date(),
                 totalPrice,
@@ -274,7 +278,8 @@ export const toggleQueuePause = async (shopId: string, isPaused: boolean) => {
 };
 
 export const getCustomerActiveQueueItem = async (customerId: string) => {
-    return await prisma.queueItem.findFirst({
+    // 1. Find the active item
+    const item = await prisma.queueItem.findFirst({
         where: {
             customerId,
             status: { in: [QueueStatus.WAITING, QueueStatus.SERVING] }
@@ -284,6 +289,78 @@ export const getCustomerActiveQueueItem = async (customerId: string) => {
             queue: { include: { shop: true } }
         }
     });
+
+    if (!item) return null;
+
+    // 2. Calculate dynamic metrics
+    const shopId = item.queue.shopId;
+    const itemPosition = await calculateCurrentPosition(item.id);
+    const peopleAhead = itemPosition - 1;
+
+    // 3. Get estimated wait time
+    // We can reuse getShopQueue logic or duplicate it here. 
+    // Reusing getShopQueue is cleaner but heavier. Let's do a lightweight calc active staff count.
+
+    // Check staff availability for shop
+    const shop = await shopService.getShopById(shopId);
+    if (!shop) throw new AppError('Shop not found', 404);
+
+    const activeOwnerCount = (shop.owner?.isAvailable) ? 1 : 0;
+    const activeBarberCount = shop.barbers?.filter(b => b.isAvailable).length || 0;
+    const activeStaffCount = activeOwnerCount + activeBarberCount;
+
+    // Calculate wait time based on people ahead and services they have? 
+    // Or just simple calc: (Time of people ahead) / activeStaff
+
+    // Get all items ahead
+    const queueItemsAhead = await prisma.queueItem.findMany({
+        where: {
+            queueId: item.queueId,
+            status: { in: [QueueStatus.WAITING, QueueStatus.SERVING] },
+            entryTime: { lt: item.entryTime }
+        },
+        include: { services: true }
+    });
+
+    let totalServiceTimeAhead = 0;
+    queueItemsAhead.forEach((qi: any) => {
+        const d = qi.services.reduce((acc: number, s: any) => acc + s.duration, 0);
+        totalServiceTimeAhead += d;
+    });
+
+    // Add my own expected service time to the wait? usually 'wait time' is until I start.
+    // So distinct from 'completion time'.
+    const estimatedWaitTime = activeStaffCount > 0
+        ? Math.ceil(totalServiceTimeAhead / activeStaffCount)
+        : totalServiceTimeAhead;
+
+    // 4. Get full queue for the live list display (limited to active items)
+    // We only need basic details for the list
+    const fullQueue = await prisma.queueItem.findMany({
+        where: {
+            queueId: item.queueId,
+            status: { in: [QueueStatus.WAITING, QueueStatus.SERVING] }
+        },
+        orderBy: { entryTime: 'asc' },
+        select: {
+            id: true,
+            status: true,
+            tokenNumber: true,
+            customer: { select: { name: true } },
+            isWalkIn: true,
+            walkInName: true
+        }
+    });
+
+    return {
+        item, // The full item object
+        shop: item.queue.shop, // The shop object
+        currentPosition: itemPosition,
+        tokenNumber: item.tokenNumber,
+        estimatedWaitTime,
+        peopleAhead,
+        fullQueue
+    };
 };
 
 export const leaveQueue = async (itemId: string, customerId: string) => {
